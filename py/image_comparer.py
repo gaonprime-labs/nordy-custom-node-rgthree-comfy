@@ -20,7 +20,8 @@ class RgthreeImageComparer(PreviewImage):
       },
       "hidden": {
         "prompt": "PROMPT",
-        "extra_pnginfo": "EXTRA_PNGINFO"
+        "extra_pnginfo": "EXTRA_PNGINFO",
+        "job_id": "JOB_ID",
       },
     }
 
@@ -29,13 +30,14 @@ class RgthreeImageComparer(PreviewImage):
                      image_b=None,
                      filename_prefix="rgthree.compare.",
                      prompt=None,
-                     extra_pnginfo=None):
+                     extra_pnginfo=None,
+                     job_id=None):
 
     result = { "ui": { "a_images":[], "b_images": [] } }
     if image_a is not None and len(image_a) > 0:
-      result['ui']['a_images'] = self.save_images(image_a, filename_prefix, prompt, extra_pnginfo)['ui']['images']
+      result['ui']['a_images'] = self.save_images(image_a, filename_prefix, prompt, extra_pnginfo, job_id)['ui']['images']
 
     if image_b is not None and len(image_b) > 0:
-      result['ui']['b_images'] = self.save_images(image_b, filename_prefix, prompt, extra_pnginfo)['ui']['images']
+      result['ui']['b_images'] = self.save_images(image_b, filename_prefix, prompt, extra_pnginfo, job_id)['ui']['images']
 
     return result

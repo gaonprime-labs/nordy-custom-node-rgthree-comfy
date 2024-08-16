@@ -6,7 +6,8 @@ import { addConnectionLayoutSupport } from "./utils.js";
 import { RgthreeBaseWidget, } from "./utils_widgets.js";
 import { measureText } from "./utils_canvas.js";
 function imageDataToUrl(data) {
-    return api.apiURL(`/view?filename=${encodeURIComponent(data.filename)}&type=${data.type}&subfolder=${data.subfolder}${app.getPreviewFormatParam()}${app.getRandParam()}`);
+    return data.url;
+    // return api.apiURL(`/view?filename=${encodeURIComponent(data.filename)}&type=${data.type}&subfolder=${data.subfolder}${app.getPreviewFormatParam()}${app.getRandParam()}`);
 }
 export class RgthreeImageComparer extends RgthreeBaseServerNode {
     constructor(title = RgthreeImageComparer.title) {
