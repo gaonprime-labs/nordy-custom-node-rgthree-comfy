@@ -5,7 +5,9 @@ class RgthreeApi {
         this.getSchedulersPromise = null;
         this.getLorasPromise = null;
         this.getWorkflowsPromise = null;
-        this.baseUrl = baseUrl || "./rgthree/api";
+        // this.baseUrl = baseUrl || "./rgthree/api";
+        //!nordy - 경로 문제 수정
+        this.baseUrl = `${window.COMFY_API_URL}/rgthree/api` ;
     }
     apiURL(route) {
         return `${this.baseUrl}${route}`;
