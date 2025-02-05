@@ -360,17 +360,20 @@ class Rgthree extends EventTarget {
                 disabled: true,
                 className: "rgthree-contextmenu-item rgthree-contextmenu-label",
             },
-            {
-                content: iconGear + "Settings (rgthree-comfy)",
-                disabled: !!this.settingsDialog,
-                className: "rgthree-contextmenu-item",
-                callback: (...args) => {
-                    this.settingsDialog = new RgthreeConfigDialog().show();
-                    this.settingsDialog.addEventListener("close", (e) => {
-                        this.settingsDialog = null;
-                    });
-                },
-            },
+            /** =======================================================
+            * !nordy 2025.02.05 - rgthree-comfy - disabled settings dialog
+            * ========================================================= */
+            // {
+            //     content: iconGear + "Settings (rgthree-comfy)",
+            //     disabled: !!this.settingsDialog,
+            //     className: "rgthree-contextmenu-item",
+            //     callback: (...args) => {
+            //         this.settingsDialog = new RgthreeConfigDialog().show();
+            //         this.settingsDialog.addEventListener("close", (e) => {
+            //             this.settingsDialog = null;
+            //         });
+            //     },
+            // },
             {
                 content: iconReplace + ` Convert ${rerouteLabel} Reroutes`,
                 disabled: !rerouteNodes.length,

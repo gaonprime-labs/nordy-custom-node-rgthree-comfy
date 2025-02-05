@@ -4,8 +4,9 @@ wildcards/**
 .vscode/
 .idea/
 node_modules/
-rgthree_config.json
-web/rgthree_config.js
-web/comfyui/rgthree_config.js
+# !nordy 2025.02.05 - rgthree.config.json 중앙관리를 위한 주석처리
+# rgthree_config.json
+# web/rgthree_config.js
+# web/comfyui/rgthree_config.js
 userdata/
 userdata/**
