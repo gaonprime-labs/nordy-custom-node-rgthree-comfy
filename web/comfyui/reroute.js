@@ -1,6 +1,5 @@
 var _a, _b;
 import { app } from "../../scripts/app.js";
-import { getWidgetConfig, mergeIfValid, setWidgetConfig, } from "../../extensions/core/widgetInputs.js";
 import { rgthreeConfig } from "../../rgthree/config.js";
 import { rgthree } from "./rgthree.js";
 import { IoDirection, LAYOUT_CLOCKWISE, LAYOUT_LABEL_OPPOSITES, LAYOUT_LABEL_TO_DATA, addConnectionLayoutSupport, addMenuItem, getSlotLinks, isValidConnection, setConnectionsLayout, waitForCanvas, } from "./utils.js";
@@ -8,6 +7,8 @@ import { SERVICE as KEY_EVENT_SERVICE } from "./services/key_events_services.js"
 import { wait } from "../../rgthree/common/shared_utils.js";
 import { RgthreeBaseVirtualNode } from "./base_node.js";
 import { NodeTypesString } from "./constants.js";
+import { rgthreeApi } from "../../rgthree/common/rgthree_api.js";
+import { getWidgetConfig, mergeIfValid, setWidgetConfig } from "./utils_deprecated_comfyui.js";
 const CONFIG_REROUTE = ((_a = rgthreeConfig === null || rgthreeConfig === void 0 ? void 0 : rgthreeConfig["nodes"]) === null || _a === void 0 ? void 0 : _a["reroute"]) || {};
 const CONFIG_FAST_REROUTE = CONFIG_REROUTE["fast_reroute"];
 const CONFIG_FAST_REROUTE_ENABLED = (_b = CONFIG_FAST_REROUTE["enabled"]) !== null && _b !== void 0 ? _b : false;
@@ -39,6 +40,7 @@ class RerouteService {
     constructor() {
         this.isFastLinking = false;
         this.handledNewRerouteKeypress = false;
+        this.connectingData = null;
         this.fastReroutesHistory = [];
         this.handleLinkingKeydownBound = this.handleLinkingKeydown.bind(this);
         this.handleLinkingKeyupBound = this.handleLinkingKeyup.bind(this);
@@ -48,21 +50,26 @@ class RerouteService {
     }
     async onCanvasSetUpListenerForLinking() {
         const canvas = await waitForCanvas();
-        canvas._connecting_node;
+        const canvasProperty = true ? "connecting_links" : "connecting_node";
+        canvas[`_${canvasProperty}`];
         const thisService = this;
-        Object.defineProperty(canvas, "connecting_node", {
+        Object.defineProperty(canvas, canvasProperty, {
             get: function () {
-                return this._connecting_node;
+                return this[`_${canvasProperty}`];
             },
-            set: function (node) {
-                const isStartingLinking = node != null && this._connecting_node == null;
-                const isStoppingLinking = canvas._connecting_node != null && node == null;
-                this._connecting_node = node;
+            set: function (value) {
+                var _a;
+                const isValNull = !value || !(value === null || value === void 0 ? void 0 : value.length);
+                const isPropNull = !this[`_${canvasProperty}`] || !((_a = this[`_${canvasProperty}`]) === null || _a === void 0 ? void 0 : _a.length);
+                const isStartingLinking = !isValNull && isPropNull;
+                const isStoppingLinking = !isPropNull && isValNull;
+                this[`_${canvasProperty}`] = value;
                 if (isStartingLinking) {
                     thisService.startingLinking();
                 }
                 if (isStoppingLinking) {
                     thisService.stoppingLinking();
+                    thisService.connectingData = null;
                 }
             },
         });
@@ -91,29 +98,73 @@ class RerouteService {
             this.handledNewRerouteKeypress = false;
         }
     }
+    getConnectingData() {
+        var _a, _b, _c, _d;
+        const oldCanvas = app.canvas;
+        if (oldCanvas.connecting_node &&
+            oldCanvas.connecting_slot != null &&
+            ((_a = oldCanvas.connecting_pos) === null || _a === void 0 ? void 0 : _a.length)) {
+            return {
+                node: oldCanvas.connecting_node,
+                input: oldCanvas.connecting_input,
+                output: oldCanvas.connecting_output,
+                slot: oldCanvas.connecting_slot,
+                pos: [...oldCanvas.connecting_pos],
+            };
+        }
+        const canvas = app.canvas;
+        if ((_b = canvas.connecting_links) === null || _b === void 0 ? void 0 : _b.length) {
+            const link = canvas.connecting_links[0];
+            return {
+                node: link.node,
+                input: (_c = link.input) !== null && _c !== void 0 ? _c : undefined,
+                output: (_d = link.output) !== null && _d !== void 0 ? _d : undefined,
+                slot: link.slot,
+                pos: [...link.pos],
+            };
+        }
+        throw new Error("Error, handling linking keydown, but there's no link.");
+    }
+    setCanvasConnectingData(ctx) {
+        var _a, _b;
+        const oldCanvas = app.canvas;
+        if (oldCanvas.connecting_node &&
+            oldCanvas.connecting_slot != null &&
+            ((_a = oldCanvas.connecting_pos) === null || _a === void 0 ? void 0 : _a.length)) {
+            oldCanvas.connecting_node = ctx.node;
+            oldCanvas.connecting_input = ctx.input;
+            oldCanvas.connecting_output = ctx.output;
+            oldCanvas.connecting_slot = ctx.slot;
+            oldCanvas.connecting_pos = ctx.pos;
+        }
+        const canvas = app.canvas;
+        if ((_b = canvas.connecting_links) === null || _b === void 0 ? void 0 : _b.length) {
+            const link = canvas.connecting_links[0];
+            link.node = ctx.node;
+            link.input = ctx.input;
+            link.output = ctx.output;
+            link.slot = ctx.slot;
+            link.pos = ctx.pos;
+        }
+    }
     insertNewRerouteWhileLinking() {
         var _a;
         const canvas = app.canvas;
-        if (!canvas.connecting_node ||
-            !canvas.connecting_pos ||
-            !(canvas.connecting_input || canvas.connecting_output)) {
+        this.connectingData = this.getConnectingData();
+        if (!this.connectingData) {
             throw new Error("Error, handling linking keydown, but there's no link.");
         }
+        const data = this.connectingData;
         const node = LiteGraph.createNode("Reroute (rgthree)");
         const entry = {
             node,
-            context: {
-                connecting_node: canvas.connecting_node,
-                connecting_input: canvas.connecting_input,
-                connecting_output: canvas.connecting_output,
-                connecting_slot: canvas.connecting_slot,
-                connecting_pos: [...canvas.connecting_pos],
-            },
+            previous: { ...this.connectingData },
+            current: undefined,
         };
         this.fastReroutesHistory.push(entry);
-        let connectingDir = (_a = (canvas.connecting_input || canvas.connecting_output)) === null || _a === void 0 ? void 0 : _a.dir;
+        let connectingDir = (_a = (data.input || data.output)) === null || _a === void 0 ? void 0 : _a.dir;
         if (!connectingDir) {
-            connectingDir = canvas.connecting_input ? LiteGraph.LEFT : LiteGraph.RIGHT;
+            connectingDir = data.input ? LiteGraph.LEFT : LiteGraph.RIGHT;
         }
         let newPos = canvas.convertEventToCanvasOffset({
             clientX: Math.round(canvas.last_mouse_position[0] / 10) * 10,
@@ -122,75 +173,71 @@ class RerouteService {
         entry.node.pos = newPos;
         canvas.graph.add(entry.node);
         canvas.selectNode(entry.node);
-        const distX = entry.node.pos[0] - canvas.connecting_pos[0];
-        const distY = entry.node.pos[1] - canvas.connecting_pos[1];
+        const distX = entry.node.pos[0] - data.pos[0];
+        const distY = entry.node.pos[1] - data.pos[1];
         const layout = ["Left", "Right"];
         if (distX > 0 && Math.abs(distX) > Math.abs(distY)) {
-            layout[0] = canvas.connecting_output ? "Left" : "Right";
+            layout[0] = data.output ? "Left" : "Right";
             layout[1] = LAYOUT_LABEL_OPPOSITES[layout[0]];
             node.pos[0] -= node.size[0] + 10;
             node.pos[1] -= Math.round(node.size[1] / 2 / 10) * 10;
         }
         else if (distX < 0 && Math.abs(distX) > Math.abs(distY)) {
-            layout[0] = canvas.connecting_output ? "Right" : "Left";
+            layout[0] = data.output ? "Right" : "Left";
             layout[1] = LAYOUT_LABEL_OPPOSITES[layout[0]];
             node.pos[1] -= Math.round(node.size[1] / 2 / 10) * 10;
         }
         else if (distY < 0 && Math.abs(distY) > Math.abs(distX)) {
-            layout[0] = canvas.connecting_output ? "Bottom" : "Top";
+            layout[0] = data.output ? "Bottom" : "Top";
             layout[1] = LAYOUT_LABEL_OPPOSITES[layout[0]];
             node.pos[0] -= Math.round(node.size[0] / 2 / 10) * 10;
         }
         else if (distY > 0 && Math.abs(distY) > Math.abs(distX)) {
-            layout[0] = canvas.connecting_output ? "Top" : "Bottom";
+            layout[0] = data.output ? "Top" : "Bottom";
             layout[1] = LAYOUT_LABEL_OPPOSITES[layout[0]];
             node.pos[0] -= Math.round(node.size[0] / 2 / 10) * 10;
             node.pos[1] -= node.size[1] + 10;
         }
         setConnectionsLayout(entry.node, layout);
-        if (canvas.connecting_output) {
-            canvas.connecting_node.connect(canvas.connecting_slot, entry.node, 0);
-            canvas.connecting_node = entry.node;
-            canvas.connecting_output = entry.node.outputs[0];
-            canvas.connecting_slot = 0;
-            canvas.connecting_pos = entry.node.getConnectionPos(false, 0);
+        if (data.output) {
+            data.node.connect(data.slot, entry.node, 0);
+            data.node = entry.node;
+            data.output = entry.node.outputs[0];
+            data.slot = 0;
+            data.pos = entry.node.getConnectionPos(false, 0);
+            data.direction =
+                layout[0] === "Top" ? 2 : layout[0] === "Bottom" ? 1 : layout[0] === "Left" ? 4 : 3;
         }
         else {
-            entry.node.connect(0, canvas.connecting_node, canvas.connecting_slot);
-            canvas.connecting_node = entry.node;
-            canvas.connecting_input = entry.node.inputs[0];
-            canvas.connecting_slot = 0;
-            canvas.connecting_pos = entry.node.getConnectionPos(true, 0);
+            entry.node.connect(0, data.node, data.slot);
+            data.node = entry.node;
+            data.input = entry.node.inputs[0];
+            data.slot = 0;
+            data.pos = entry.node.getConnectionPos(true, 0);
+            data.direction =
+                layout[1] === "Top" ? 2 : layout[1] === "Bottom" ? 1 : layout[1] === "Left" ? 4 : 3;
         }
-        entry.context.connecting_node = canvas.connecting_node;
-        entry.context.connecting_input = canvas.connecting_input;
-        entry.context.connecting_output = canvas.connecting_output;
-        entry.context.connecting_slot = canvas.connecting_slot;
-        entry.context.connecting_pos = [...canvas.connecting_pos];
+        this.setCanvasConnectingData(data);
+        entry.current = { ...this.connectingData };
         app.graph.setDirtyCanvas(true, true);
     }
     handleMoveOrResizeNodeMaybeWhileDragging(node) {
-        const canvas = app.canvas;
-        if (this.isFastLinking && node === canvas.connecting_node) {
+        const data = this.connectingData;
+        if (this.isFastLinking && node === (data === null || data === void 0 ? void 0 : data.node)) {
             const entry = this.fastReroutesHistory[this.fastReroutesHistory.length - 1];
             if (entry) {
-                canvas.connecting_pos = entry.node.getConnectionPos(!!canvas.connecting_input, 0);
+                data.pos = entry.node.getConnectionPos(!!data.input, 0);
+                this.setCanvasConnectingData(data);
             }
         }
     }
     handleRemovedNodeMaybeWhileDragging(node) {
-        const lastEntry = this.fastReroutesHistory[this.fastReroutesHistory.length - 1];
-        const prevEntry = this.fastReroutesHistory[this.fastReroutesHistory.length - 2];
-        if (prevEntry && lastEntry && lastEntry.node === node) {
-            const canvas = app.canvas;
-            canvas.connecting_node = prevEntry.context.connecting_node;
-            canvas.connecting_input = prevEntry.context.connecting_input;
-            canvas.connecting_output = prevEntry.context.connecting_output;
-            canvas.connecting_slot = prevEntry.context.connecting_slot;
-            canvas.connecting_pos = [...prevEntry.context.connecting_pos];
+        const currentEntry = this.fastReroutesHistory[this.fastReroutesHistory.length - 1];
+        if ((currentEntry === null || currentEntry === void 0 ? void 0 : currentEntry.node) === node) {
+            this.setCanvasConnectingData(currentEntry.previous);
             this.fastReroutesHistory.splice(this.fastReroutesHistory.length - 1, 1);
-            if ((prevEntry === null || prevEntry === void 0 ? void 0 : prevEntry.node) instanceof RerouteNode) {
-                canvas.selectNode(prevEntry.node);
+            if (currentEntry.previous.node) {
+                app.canvas.selectNode(currentEntry.previous.node);
             }
         }
     }
@@ -227,7 +274,7 @@ class RerouteNode extends RgthreeBaseVirtualNode {
     }
     onConstructed() {
         var _a;
-        this.setResizable((_a = this.properties["resizable"]) !== null && _a !== void 0 ? _a : configResizable);
+        this.setResizable(!!((_a = this.properties["resizable"]) !== null && _a !== void 0 ? _a : configResizable));
         this.size = RerouteNode.size;
         this.addInput("", "*");
         this.addOutput("", "*");
@@ -235,16 +282,13 @@ class RerouteNode extends RgthreeBaseVirtualNode {
         return super.onConstructed();
     }
     configure(info) {
-        var _a, _b, _c;
-        if ((_a = info.outputs) === null || _a === void 0 ? void 0 : _a.length) {
-            info.outputs.length = 1;
-        }
-        if ((_b = info.inputs) === null || _b === void 0 ? void 0 : _b.length) {
+        var _a, _b;
+        if ((_a = info.inputs) === null || _a === void 0 ? void 0 : _a.length) {
             info.inputs.length = 1;
         }
         super.configure(info);
         this.configuring = true;
-        this.setResizable((_c = this.properties["resizable"]) !== null && _c !== void 0 ? _c : configResizable);
+        this.setResizable(!!((_b = this.properties["resizable"]) !== null && _b !== void 0 ? _b : configResizable));
         this.applyNodeSize();
         this.configuring = false;
     }
@@ -260,7 +304,7 @@ class RerouteNode extends RgthreeBaseVirtualNode {
     }
     onConnectionsChange(type, _slotIndex, connected, _link_info, _ioSlot) {
         if (connected && type === LiteGraph.OUTPUT) {
-            const types = new Set(this.outputs[0].links.map((l) => app.graph.links[l].type).filter((t) => t !== "*"));
+            const types = new Set(this.outputs[0].links.map((l) => { var _a; return (_a = app.graph.links[l]) === null || _a === void 0 ? void 0 : _a.type; }).filter((t) => t && t !== "*"));
             if (types.size > 1) {
                 const linksToDisconnect = [];
                 for (let i = 0; i < this.outputs[0].links.length - 1; i++) {
@@ -295,11 +339,11 @@ class RerouteNode extends RgthreeBaseVirtualNode {
             ctx.restore();
         }
     }
-    findInputSlot(name) {
-        return 0;
+    findInputSlot(name, returnObj = false) {
+        return returnObj ? this.inputs[0] : 0;
     }
-    findOutputSlot(name) {
-        return 0;
+    findOutputSlot(name, returnObj) {
+        return returnObj ? this.outputs[0] : 0;
     }
     disconnectOutput(slot, targetNode) {
         return super.disconnectOutput(slot, targetNode);
@@ -309,7 +353,7 @@ class RerouteNode extends RgthreeBaseVirtualNode {
         if (rgthree.replacingReroute != null && ((_a = this.inputs[0]) === null || _a === void 0 ? void 0 : _a.link)) {
             const graph = app.graph;
             const link = graph.links[this.inputs[0].link];
-            const node = graph.getNodeById(link === null || link === void 0 ? void 0 : link.origin_id);
+            const node = (link === null || link === void 0 ? void 0 : link.origin_id) != null ? graph.getNodeById(link.origin_id) : null;
             if (rgthree.replacingReroute !== (node === null || node === void 0 ? void 0 : node.id)) {
                 return false;
             }
@@ -415,6 +459,7 @@ class RerouteNode extends RgthreeBaseVirtualNode {
                             outputWidgetConfig = null;
                             outputWidget = null;
                             if (output === null || output === void 0 ? void 0 : output.widget) {
+                                rgthreeApi.print("PRIMITIVE_REROUTE");
                                 try {
                                     const config = getWidgetConfig(output);
                                     if (!outputWidgetConfig && config) {
@@ -424,7 +469,7 @@ class RerouteNode extends RgthreeBaseVirtualNode {
                                             outputWidget = (_f = outputNode.widgets) === null || _f === void 0 ? void 0 : _f.find((w) => { var _a; return w.name === ((_a = output === null || output === void 0 ? void 0 : output.widget) === null || _a === void 0 ? void 0 : _a.name); });
                                         }
                                         const merged = mergeIfValid(output, [config[0], outputWidgetConfig]);
-                                        if (merged.customConfig) {
+                                        if (merged === null || merged === void 0 ? void 0 : merged.customConfig) {
                                             outputWidgetConfig = merged.customConfig;
                                         }
                                     }
@@ -452,14 +497,15 @@ class RerouteNode extends RgthreeBaseVirtualNode {
             (_h = (_g = node).applyNodeSize) === null || _h === void 0 ? void 0 : _h.call(_g);
             for (const l of node.outputs[0].links || []) {
                 const link = app.graph.links[l];
-                if (link) {
+                if (link && color) {
                     link.color = color;
                 }
             }
             try {
                 if (outputWidgetConfig && outputWidget && outputType) {
+                    rgthreeApi.print("PRIMITIVE_REROUTE");
                     node.inputs[0].widget = { name: "value" };
-                    setWidgetConfig(node.inputs[0], [outputType !== null && outputType !== void 0 ? outputType : displayType, outputWidgetConfig], outputWidget);
+                    setWidgetConfig(node.inputs[0], [outputType !== null && outputType !== void 0 ? outputType : displayType, outputWidgetConfig]);
                 }
                 else {
                     setWidgetConfig(node.inputs[0], null);
@@ -478,7 +524,7 @@ class RerouteNode extends RgthreeBaseVirtualNode {
             const links = inputNode.outputs[inputNodeOutputSlot].links;
             for (const l of links || []) {
                 const link = app.graph.links[l];
-                if (link) {
+                if (link && color) {
                     link.color = color;
                 }
             }
@@ -498,8 +544,8 @@ class RerouteNode extends RgthreeBaseVirtualNode {
         if (newSize[0] === 10 || newSize[1] === 10) {
             const props = this.properties;
             props["connections_layout"] = props["connections_layout"] || ["Left", "Right"];
-            const layout = props["connections_layout"];
             props["connections_dir"] = props["connections_dir"] || [-1, -1];
+            const layout = props["connections_layout"];
             const dir = props["connections_dir"];
             if (oldSize[0] > 10 && newSize[0] === 10) {
                 dir[0] = LiteGraph.DOWN;
@@ -552,27 +598,22 @@ class RerouteNode extends RgthreeBaseVirtualNode {
         const h = this.size[1];
         this.properties["connections_layout"] =
             this.properties["connections_layout"] || this.defaultConnectionsLayout;
-        const inputDirIndex = LAYOUT_CLOCKWISE.indexOf(this.properties["connections_layout"][0]);
-        const outputDirIndex = LAYOUT_CLOCKWISE.indexOf(this.properties["connections_layout"][1]);
+        const connections_layout = this.properties["connections_layout"];
+        const inputDirIndex = LAYOUT_CLOCKWISE.indexOf(connections_layout[0]);
+        const outputDirIndex = LAYOUT_CLOCKWISE.indexOf(connections_layout[1]);
         if (degrees == 90 || degrees === -90) {
             if (degrees === -90) {
-                this.properties["connections_layout"][0] =
-                    LAYOUT_CLOCKWISE[(((inputDirIndex - 1) % 4) + 4) % 4];
-                this.properties["connections_layout"][1] =
-                    LAYOUT_CLOCKWISE[(((outputDirIndex - 1) % 4) + 4) % 4];
+                connections_layout[0] = LAYOUT_CLOCKWISE[(((inputDirIndex - 1) % 4) + 4) % 4];
+                connections_layout[1] = LAYOUT_CLOCKWISE[(((outputDirIndex - 1) % 4) + 4) % 4];
             }
             else {
-                this.properties["connections_layout"][0] =
-                    LAYOUT_CLOCKWISE[(((inputDirIndex + 1) % 4) + 4) % 4];
-                this.properties["connections_layout"][1] =
-                    LAYOUT_CLOCKWISE[(((outputDirIndex + 1) % 4) + 4) % 4];
+                connections_layout[0] = LAYOUT_CLOCKWISE[(((inputDirIndex + 1) % 4) + 4) % 4];
+                connections_layout[1] = LAYOUT_CLOCKWISE[(((outputDirIndex + 1) % 4) + 4) % 4];
             }
         }
         else if (degrees === 180) {
-            this.properties["connections_layout"][0] =
-                LAYOUT_CLOCKWISE[(((inputDirIndex + 2) % 4) + 4) % 4];
-            this.properties["connections_layout"][1] =
-                LAYOUT_CLOCKWISE[(((outputDirIndex + 2) % 4) + 4) % 4];
+            connections_layout[0] = LAYOUT_CLOCKWISE[(((inputDirIndex + 2) % 4) + 4) % 4];
+            connections_layout[1] = LAYOUT_CLOCKWISE[(((outputDirIndex + 2) % 4) + 4) % 4];
         }
         this.setSize([h, w]);
     }
@@ -612,13 +653,15 @@ class RerouteNode extends RgthreeBaseVirtualNode {
         var _a, _b;
         const props = this.properties;
         props["connections_layout"] = props["connections_layout"] || ["Left", "Right"];
+        const connections_layout = this.properties["connections_layout"];
         const propIdx = ioDir == IoDirection.INPUT ? 0 : 1;
         const oppositeIdx = propIdx ? 0 : 1;
-        let currentLayout = props["connections_layout"][propIdx];
-        let oppositeLayout = props["connections_layout"][oppositeIdx];
+        let currentLayout = connections_layout[propIdx];
+        let oppositeLayout = connections_layout[oppositeIdx];
         if (this.size[0] === 10 || this.size[1] === 10) {
             props["connections_dir"] = props["connections_dir"] || [-1, -1];
-            let currentDir = props["connections_dir"][propIdx];
+            const connections_dir = this.properties["connections_dir"];
+            let currentDir = connections_dir[propIdx];
             const options = this.size[0] === 10
                 ? currentLayout === "Bottom"
                     ? [LiteGraph.DOWN, LiteGraph.RIGHT, LiteGraph.LEFT]
@@ -628,7 +671,7 @@ class RerouteNode extends RgthreeBaseVirtualNode {
                     : [LiteGraph.LEFT, LiteGraph.UP, LiteGraph.DOWN];
             let idx = options.indexOf(currentDir);
             let next = (_a = options[idx + 1]) !== null && _a !== void 0 ? _a : options[0];
-            this.properties["connections_dir"][propIdx] = next;
+            connections_dir[propIdx] = next;
             return;
         }
         let next = currentLayout;
@@ -636,7 +679,7 @@ class RerouteNode extends RgthreeBaseVirtualNode {
             let idx = LAYOUT_CLOCKWISE.indexOf(next);
             next = (_b = LAYOUT_CLOCKWISE[idx + 1]) !== null && _b !== void 0 ? _b : LAYOUT_CLOCKWISE[0];
         } while (next === oppositeLayout);
-        this.properties["connections_layout"][propIdx] = next;
+        connections_layout[propIdx] = next;
         this.setDirtyCanvas(true, true);
     }
     onMouseMove(event) {
@@ -872,26 +915,23 @@ addMenuItem(RerouteNode, app, {
             node.rotate(180);
         }
         else {
-            const inputDirIndex = LAYOUT_CLOCKWISE.indexOf(node.properties["connections_layout"][0]);
-            const outputDirIndex = LAYOUT_CLOCKWISE.indexOf(node.properties["connections_layout"][1]);
+            const connections_layout = node.properties["connections_layout"];
+            const inputDirIndex = LAYOUT_CLOCKWISE.indexOf(connections_layout[0]);
+            const outputDirIndex = LAYOUT_CLOCKWISE.indexOf(connections_layout[1]);
             if (value === null || value === void 0 ? void 0 : value.startsWith("Flip Horizontally")) {
-                if (["Left", "Right"].includes(node.properties["connections_layout"][0])) {
-                    node.properties["connections_layout"][0] =
-                        LAYOUT_CLOCKWISE[(((inputDirIndex + 2) % 4) + 4) % 4];
+                if (["Left", "Right"].includes(connections_layout[0])) {
+                    connections_layout[0] = LAYOUT_CLOCKWISE[(((inputDirIndex + 2) % 4) + 4) % 4];
                 }
-                if (["Left", "Right"].includes(node.properties["connections_layout"][1])) {
-                    node.properties["connections_layout"][1] =
-                        LAYOUT_CLOCKWISE[(((outputDirIndex + 2) % 4) + 4) % 4];
+                if (["Left", "Right"].includes(connections_layout[1])) {
+                    connections_layout[1] = LAYOUT_CLOCKWISE[(((outputDirIndex + 2) % 4) + 4) % 4];
                 }
             }
             else if (value === null || value === void 0 ? void 0 : value.startsWith("Flip Vertically")) {
-                if (["Top", "Bottom"].includes(node.properties["connections_layout"][0])) {
-                    node.properties["connections_layout"][0] =
-                        LAYOUT_CLOCKWISE[(((inputDirIndex + 2) % 4) + 4) % 4];
+                if (["Top", "Bottom"].includes(connections_layout[0])) {
+                    connections_layout[0] = LAYOUT_CLOCKWISE[(((inputDirIndex + 2) % 4) + 4) % 4];
                 }
-                if (["Top", "Bottom"].includes(node.properties["connections_layout"][1])) {
-                    node.properties["connections_layout"][1] =
-                        LAYOUT_CLOCKWISE[(((outputDirIndex + 2) % 4) + 4) % 4];
+                if (["Top", "Bottom"].includes(connections_layout[1])) {
+                    connections_layout[1] = LAYOUT_CLOCKWISE[(((outputDirIndex + 2) % 4) + 4) % 4];
                 }
             }
         }

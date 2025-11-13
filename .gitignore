@@ -10,3 +10,5 @@ node_modules/
 # web/comfyui/rgthree_config.js
 userdata/
 userdata/**
+web/comfyui/testing/
+web/comfyui/tests/

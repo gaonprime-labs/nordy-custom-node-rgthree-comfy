@@ -1,37 +1,31 @@
 import hashlib
-import requests
 import json
-import torch
-import re
 import os
-import copy
-
+import re
 from datetime import datetime
 
-from .utils import get_dict_value, load_json_file, path_exists, save_json_file
-from .utils_userdata import read_userdata_json, save_userdata_json, delete_userdata_file
+import requests
 
-import folder_paths
 from server import PromptServer
+import folder_paths
+
+from ..utils import abspath, get_dict_value, load_json_file, file_exists, remove_path, save_json_file
+from ..utils_userdata import read_userdata_json, save_userdata_json, delete_userdata_file
 
 
 def _get_info_cache_file(data_type: str, file_hash: str):
   return f'info/{file_hash}.{data_type}.json'
 
 
-async def delete_model_info(file: str,
-                            model_type="loras",
-                            del_info=True,
-                            del_metadata=True,
-                            del_civitai=True):
+async def delete_model_info(
+  file: str, model_type, del_info=True, del_metadata=True, del_civitai=True
+):
   """Delete the info json, and the civitai & metadata caches."""
   file_path = get_folder_path(file, model_type)
   if file_path is None:
     return
   if del_info:
-    try_info_path = f'{file_path}.rgthree-info.json'
-    if os.path.isfile(try_info_path):
-      os.remove(try_info_path)
+    remove_path(get_info_file(file_path))
   if del_civitai or del_metadata:
     file_hash = _get_sha256_hash(file_path)
     if del_civitai:
@@ -42,51 +36,81 @@ async def delete_model_info(file: str,
       delete_userdata_file(json_file_path)
 
 
-async def get_model_info(file: str,
-                         model_type="loras",
-                         default=None,
-                         maybe_fetch_civitai=False,
-                         force_fetch_civitai=False,
-                         maybe_fetch_metadata=False,
-                         force_fetch_metadata=False,
-                         light=False):
+def get_file_info(file: str, model_type):
+  """Gets basic file info, like created or modified date."""
+  file_path = get_folder_path(file, model_type)
+  if file_path is None:
+    return None
+  return {
+    'file': file,
+    'path': file_path,
+    'modified': os.path.getmtime(file_path) * 1000,  # millis
+    'imageLocal': f'/rgthree/api/{model_type}/img?file={file}' if get_img_file(file_path) else None,
+    'hasInfoFile': get_info_file(file_path) is not None,
+  }
+
+
+def get_info_file(file_path: str, force=False):
+  # Try to load a rgthree-info.json file next to the file.
+  info_path = f'{file_path}.rgthree-info.json'
+  return info_path if file_exists(info_path) or force else None
+
+
+def get_img_file(file_path: str, force=False):
+  for ext in ['jpg', 'png', 'jpeg', 'webp']:
+    try_path = f'{os.path.splitext(file_path)[0]}.{ext}'
+    if file_exists(try_path):
+      return try_path
+
+
+def get_model_info_file_data(file: str, model_type, default=None):
+  """Returns the data from the info file, or a default value if it doesn't exist."""
+  file_path = get_folder_path(file, model_type)
+  if file_path is None:
+    return default
+  return load_json_file(get_info_file(file_path), default=default)
+
+
+async def get_model_info(
+  file: str,
+  model_type,
+  default=None,
+  maybe_fetch_civitai=False,
+  force_fetch_civitai=False,
+  maybe_fetch_metadata=False,
+  force_fetch_metadata=False,
+  light=False
+):
   """Compiles a model info given a stored file next to the model, and/or metadata/civitai."""
 
   file_path = get_folder_path(file, model_type)
   if file_path is None:
     return default
 
-  info_data = {}
   should_save = False
+  # basic data
+  basic_data = get_file_info(file, model_type)
   # Try to load a rgthree-info.json file next to the file.
-  try_info_path = f'{file_path}.rgthree-info.json'
-  if path_exists(try_info_path):
-    info_data = load_json_file(try_info_path)
+  info_data = get_model_info_file_data(file, model_type, default={})
 
-  if 'file' not in info_data:
-    info_data['file'] = file
-    should_save = True
-  if 'path' not in info_data:
-    info_data['path'] = file_path
-    should_save = True
+  for key in ['file', 'path', 'modified', 'imageLocal', 'hasInfoFile']:
+    if key in basic_data and basic_data[key] and (
+      key not in info_data or info_data[key] != basic_data[key]
+    ):
+      info_data[key] = basic_data[key]
+      should_save = True
 
   # Check if we have an image next to the file and, if so, add it to the front of the images
   # (if it isn't already).
-  img_next_to_file = None
-  for ext in ['jpg', 'png', 'jpeg']:
-    try_path = f'{os.path.splitext(file_path)[0]}.{ext}'
-    if path_exists(try_path):
-      img_next_to_file = try_path
-      break
+  img_next_to_file = basic_data['imageLocal']
 
   if 'images' not in info_data:
     info_data['images'] = []
     should_save = True
 
   if img_next_to_file:
-    img_next_to_file_url = f'/rgthree/api/loras/img?file={file}'
-    if len(info_data['images']) == 0 or info_data['images'][0]['url'] != img_next_to_file_url:
-      info_data['images'].insert(0, {'url': img_next_to_file_url})
+    if len(info_data['images']) == 0 or info_data['images'][0]['url'] != img_next_to_file:
+      info_data['images'].insert(0, {'url': img_next_to_file})
       should_save = True
 
   # If we just want light data then bail now with just existing data, plus file, path and img if
@@ -100,23 +124,21 @@ async def get_model_info(file: str,
 
   should_save = _update_data(info_data) or should_save
 
-  should_fetch_civitai = force_fetch_civitai is True or (maybe_fetch_civitai is True and
-                                                         'civitai' not in info_data['raw'])
-  should_fetch_metadata = force_fetch_metadata is True or (maybe_fetch_metadata is True and
-                                                           'metadata' not in info_data['raw'])
+  should_fetch_civitai = force_fetch_civitai is True or (
+    maybe_fetch_civitai is True and 'civitai' not in info_data['raw']
+  )
+  should_fetch_metadata = force_fetch_metadata is True or (
+    maybe_fetch_metadata is True and 'metadata' not in info_data['raw']
+  )
 
   if should_fetch_metadata:
-    data_meta = _get_model_metadata(file,
-                                    model_type=model_type,
-                                    default={},
-                                    refresh=force_fetch_metadata)
+    data_meta = _get_model_metadata(file, model_type, default={}, refresh=force_fetch_metadata)
     should_save = _merge_metadata(info_data, data_meta) or should_save
 
   if should_fetch_civitai:
-    data_civitai = _get_model_civitai_data(file,
-                                           model_type=model_type,
-                                           default={},
-                                           refresh=force_fetch_civitai)
+    data_civitai = _get_model_civitai_data(
+      file, model_type, default={}, refresh=force_fetch_civitai
+    )
     should_save = _merge_civitai_data(info_data, data_civitai) or should_save
 
   if 'sha256' not in info_data:
@@ -128,13 +150,15 @@ async def get_model_info(file: str,
   if should_save:
     if 'trainedWords' in info_data:
       # Sort by count; if it doesn't exist, then assume it's a top item from civitai or elsewhere.
-      info_data['trainedWords'] = sorted(info_data['trainedWords'],
-                                         key=lambda w: w['count'] if 'count' in w else 99999,
-                                         reverse=True)
-    save_model_info(file, info_data, model_type=model_type)
+      info_data['trainedWords'] = sorted(
+        info_data['trainedWords'],
+        key=lambda w: w['count'] if 'count' in w else 99999,
+        reverse=True
+      )
+    save_model_info(file, info_data, model_type)
 
     # If we're saving, then the UI is likely waiting to see if the refreshed data is coming in.
-    await PromptServer.instance.send("rgthree-refreshed-lora-info", {"data": info_data})
+    await PromptServer.instance.send(f"rgthree-refreshed-{model_type}-info", {"data": info_data})
 
   return info_data
 
@@ -144,8 +168,10 @@ def _update_data(info_data: dict) -> bool:
   should_save = False
   # If we have "triggerWords" then move them over to "trainedWords"
   if 'triggerWords' in info_data and len(info_data['triggerWords']) > 0:
-    civitai_words = ','.join((get_dict_value(info_data, 'raw.civitai.triggerWords', default=[]) +
-                              get_dict_value(info_data, 'raw.civitai.trainedWords', default=[])))
+    civitai_words = ','.join((
+      get_dict_value(info_data, 'raw.civitai.triggerWords', default=[]) +
+      get_dict_value(info_data, 'raw.civitai.trainedWords', default=[])
+    ))
     if 'trainedWords' not in info_data:
       info_data['trainedWords'] = []
     for trigger_word in info_data['triggerWords']:
@@ -242,7 +268,8 @@ def _merge_civitai_data(info_data: dict, data_civitai: dict) -> bool:
         info_data['trainedWords'] = []
       for trigger_word in civitai_words:
         word_data = next(
-          (data for data in info_data['trainedWords'] if data['word'] == trigger_word), None)
+          (data for data in info_data['trainedWords'] if data['word'] == trigger_word), None
+        )
         if word_data is None:
           word_data = {'word': trigger_word}
           info_data['trainedWords'].append(word_data)
@@ -263,8 +290,9 @@ def _merge_civitai_data(info_data: dict, data_civitai: dict) -> bool:
 
   # Take images from civitai
   if 'images' in data_civitai:
-    info_data_image_urls = list(map(lambda i: i['url']
-                                    if 'url' in i else None, info_data['images']))
+    info_data_image_urls = list(
+      map(lambda i: i['url'] if 'url' in i else None, info_data['images'])
+    )
     for img in data_civitai['images']:
       img_url = get_dict_value(img, 'url')
       if img_url is not None and img_url not in info_data_image_urls:
@@ -296,7 +324,7 @@ def _merge_civitai_data(info_data: dict, data_civitai: dict) -> bool:
   return should_save
 
 
-def _get_model_civitai_data(file: str, model_type="loras", default=None, refresh=False):
+def _get_model_civitai_data(file: str, model_type, default=None, refresh=False):
   """Gets the civitai data, either cached from the user directory, or from civitai api."""
   file_hash = _get_sha256_hash(get_folder_path(file, model_type))
   if file_hash is None:
@@ -310,11 +338,13 @@ def _get_model_civitai_data(file: str, model_type="loras", default=None, refresh
     try:
       response = requests.get(api_url, timeout=5000)
       data = response.json()
-      save_userdata_json(json_file_path, {
-        'url': api_url,
-        'timestamp': datetime.now().timestamp(),
-        'response': data
-      })
+      save_userdata_json(
+        json_file_path, {
+          'url': api_url,
+          'timestamp': datetime.now().timestamp(),
+          'response': data
+        }
+      )
       file_data = read_userdata_json(json_file_path)
     except requests.exceptions.RequestException as e:  # This is the correct syntax
       print(e)
@@ -325,7 +355,7 @@ def _get_model_civitai_data(file: str, model_type="loras", default=None, refresh
   return response if response is not None else default
 
 
-def _get_model_metadata(file: str, model_type="loras", default=None, refresh=False):
+def _get_model_metadata(file: str, model_type, default=None, refresh=False):
   """Gets the metadata from the file itself."""
   file_path = get_folder_path(file, model_type)
   file_hash = _get_sha256_hash(file_path)
@@ -381,41 +411,42 @@ def _read_file_metadata_from_header(file_path: str) -> dict:
   return data
 
 
-def get_folder_path(file: str, model_type="loras"):
+def get_folder_path(file: str, model_type) -> str | None:
   """Gets the file path ensuring it exists."""
   file_path = folder_paths.get_full_path(model_type, file)
-  if file_path and not path_exists(file_path):
-    file_path = os.path.abspath(file_path)
-  if not path_exists(file_path):
+  if not file_exists(file_path):
+    file_path = abspath(file_path)
+  if not file_exists(file_path):
     file_path = None
   return file_path
 
 
-def _get_sha256_hash(file_path: str):
+def _get_sha256_hash(file_path: str | None):
   """Returns the hash for the file."""
-  if not file_path or not path_exists(file_path):
+  if not file_path or not file_exists(file_path):
     return None
+  BUF_SIZE = 1024 * 128  # lets read stuff in 64kb chunks!
   file_hash = None
   sha256_hash = hashlib.sha256()
   with open(file_path, "rb") as f:
-    # Read and update hash string value in blocks of 4K
-    for byte_block in iter(lambda: f.read(4096), b""):
+    # Read and update hash string value in blocks of BUF_SIZE
+    for byte_block in iter(lambda: f.read(BUF_SIZE), b""):
       sha256_hash.update(byte_block)
     file_hash = sha256_hash.hexdigest()
   return file_hash
 
 
-async def set_model_info_partial(file: str, info_data_partial, model_type="loras"):
+async def set_model_info_partial(file: str, model_type: str, info_data_partial):
   """Sets partial data into the existing model info data."""
-  info_data = await get_model_info(file, model_type=model_type, default={})
+  info_data = await get_model_info(file, model_type, default={})
   info_data = {**info_data, **info_data_partial}
-  save_model_info(file, info_data, model_type=model_type)
+  save_model_info(file, info_data, model_type)
 
 
-def save_model_info(file: str, info_data, model_type="loras"):
+def save_model_info(file: str, info_data, model_type):
   """Saves the model info alongside the model itself."""
   file_path = get_folder_path(file, model_type)
   if file_path is None:
     return
-  try_info_path = f'{file_path}.rgthree-info.json'
-  save_json_file(try_info_path, info_data)
+  info_path = get_info_file(file_path, force=True)
+  save_json_file(info_path, info_data)
